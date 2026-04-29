@@ -1,0 +1,24 @@
+services:
+  - type: web
+    name: config-app-backend
+    runtime: node
+    rootDir: backend
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: PORT
+        value: 5001
+      - key: APP_CONFIG_PATH
+        value: config.json
+
+  - type: web
+    name: config-app-frontend
+    runtime: static
+    rootDir: frontend
+    buildCommand: npm install && npm run build
+    staticPublishPath: dist
+    envVars:
+      - key: VITE_API_BASE
+        sync: false

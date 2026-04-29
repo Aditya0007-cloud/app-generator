@@ -1,0 +1,60 @@
+{
+  "appName": "User App",
+  "apiBase": "http://localhost:5001",
+  "entity": "users",
+  "features": {
+    "localization": true,
+    "csvImport": true,
+    "notifications": true,
+    "responsive": true
+  },
+  "auth": {
+    "enabled": true,
+    "title": "Welcome",
+    "fields": [
+      { "name": "email", "label": "Email", "type": "email", "required": true },
+      { "name": "password", "label": "Password", "type": "password", "required": true }
+    ]
+  },
+  "localization": {
+    "defaultLocale": "en",
+    "supportedLocales": [
+      { "code": "en", "label": "English" },
+      { "code": "hi", "label": "Hindi" }
+    ],
+    "messages": {
+      "en": {
+        "data": "Data",
+        "submit": "Submit",
+        "save": "Save changes",
+        "cancel": "Cancel",
+        "edit": "Edit",
+        "delete": "Delete",
+        "login": "Log in",
+        "signup": "Sign up",
+        "logout": "Log out",
+        "importCsv": "Import CSV",
+        "notifications": "Notifications",
+        "empty": "No records yet"
+      },
+      "hi": {
+        "data": "डेटा",
+        "submit": "जमा करें",
+        "save": "बदलाव सेव करें",
+        "cancel": "रद्द करें",
+        "edit": "बदलें",
+        "delete": "हटाएं",
+        "login": "लॉग इन",
+        "signup": "साइन अप",
+        "logout": "लॉग आउट",
+        "importCsv": "CSV इंपोर्ट",
+        "notifications": "सूचनाएं",
+        "empty": "अभी कोई रिकॉर्ड नहीं"
+      }
+    }
+  },
+  "fields": [
+    { "name": "name", "label": "Name", "type": "text", "required": true, "placeholder": "Full name" },
+    { "name": "email", "label": "Email", "type": "email", "required": true, "placeholder": "name@example.com" }
+  ]
+}
