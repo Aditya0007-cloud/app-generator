@@ -34,6 +34,18 @@ function quoteIdentifier(value) {
   return `"${value.replace(/"/g, '""')}"`;
 }
 
+function humanizeFieldName(value) {
+  return String(value || "Value")
+    .replace(/_/g, " ")
+    .replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+function uniqueViolationMessage(err) {
+  const match = String(err.detail || "").match(/Key \(([^)]+)\)=\(([^)]+)\) already exists/);
+  const field = match?.[1] ? humanizeFieldName(match[1]) : "Value";
+  return `${field} already exists. Please use a different value.`;
+}
+
 function readConfig() {
   const fallback = {
     appName: "Config App",
@@ -566,6 +578,9 @@ app.delete("/api/:entity/:id", requireAuth, async (req, res, next) => {
 });
 
 app.use((err, req, res, next) => {
+  if (err.code === "23505") {
+    return res.status(409).json({ error: uniqueViolationMessage(err) });
+  }
   console.error(err);
   res.status(500).json({ error: "Server error", detail: err.message });
 });
