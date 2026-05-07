@@ -9,7 +9,7 @@
     "responsive": true
   },
   "auth": {
-    "enabled": true,
+    "enabled": false,
     "title": "Welcome",
     "fields": [
       { "name": "email", "label": "Email", "type": "email", "required": true },
@@ -55,6 +55,7 @@
   },
   "fields": [
     { "name": "name", "label": "Name", "type": "text", "required": true, "placeholder": "Full name" },
-    { "name": "email", "label": "Email", "type": "email", "required": true, "placeholder": "name@example.com" }
+    { "name": "email", "label": "Email", "type": "email", "required": true, "placeholder": "name@example.com" },
+    { "name": "age", "label": "Age", "type": "number", "required": false, "placeholder": "Age" }
   ]
 }

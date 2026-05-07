@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import "./styles.css";
 
@@ -301,6 +301,7 @@ function AppView({
   onEdit,
   onDelete,
   onImport,
+  authEnabled,
 }) {
   const locales = config.localization.supportedLocales || [];
   const editRecord = records.find((record) => String(record.id) === String(editId));
@@ -315,8 +316,12 @@ function AppView({
               {locales.map((item) => <option key={item.code} value={item.code}>{item.label || item.code}</option>)}
             </select>
           ) : null}
-          <span className="muted">{user?.email}</span>
-          <button type="button" className="secondary" onClick={onLogout}>{t("logout")}</button>
+          {authEnabled ? (
+            <>
+              <span className="muted">{user?.email}</span>
+              <button type="button" className="secondary" onClick={onLogout}>{t("logout")}</button>
+            </>
+          ) : null}
         </div>
       </header>
 
@@ -359,6 +364,8 @@ function App() {
   const [statusType, setStatusType] = useState("");
   const [toast, setToast] = useState("");
   const [locale, setLocaleState] = useState(() => localStorage.getItem("app_locale") || "en");
+  const configSignatureRef = useRef("");
+  const localeRef = useRef(locale);
 
   const t = useMemo(() => {
     return (key) => {
@@ -426,37 +433,58 @@ function App() {
   }
 
   useEffect(() => {
+    localeRef.current = locale;
+  }, [locale]);
+
+  useEffect(() => {
+    let mounted = true;
+
     async function loadConfig() {
       try {
-        const response = await fetch("/config.json");
+        const response = await fetch(`/config.json?t=${Date.now()}`, { cache: "no-store" });
         if (!response.ok) throw new Error("Could not load config.json");
         const loaded = normalizeConfig(await response.json());
         const supported = loaded.localization.supportedLocales || [];
         const defaultLocale = loaded.localization.defaultLocale || "en";
+        const signature = JSON.stringify(loaded);
 
-        if (supported.length && !supported.some((item) => item.code === locale)) {
+        if (!mounted) return;
+
+        if (supported.length && !supported.some((item) => item.code === localeRef.current)) {
           setLocale(defaultLocale);
         }
 
-        document.title = loaded.appName;
-        setConfig(loaded);
+        if (signature !== configSignatureRef.current) {
+          configSignatureRef.current = signature;
+          document.title = loaded.appName;
+          setConfig(loaded);
+        }
       } catch (err) {
-        setConfigError(err.message);
+        if (mounted) setConfigError(err.message);
       }
     }
 
     loadConfig();
+    const timer = window.setInterval(loadConfig, 2000);
+
+    return () => {
+      mounted = false;
+      window.clearInterval(timer);
+    };
   }, []);
 
   useEffect(() => {
-    if (!config || !token) return;
+    if (!config) return;
 
-    refreshAll().catch((err) => {
+    const authRequired = config.auth.enabled !== false;
+    if (authRequired && !token) return;
+
+    refreshAll(token).catch((err) => {
       setToken("");
       localStorage.removeItem("app_token");
       showStatus(err.message, "error");
     });
-  }, [config]);
+  }, [config, token]);
 
   async function submitAuth(form) {
     setLoading(true);
@@ -592,9 +620,11 @@ function App() {
     );
   }
 
+  const authRequired = config.auth.enabled !== false;
+
   return (
     <>
-      {config.auth.enabled !== false && !token ? (
+      {authRequired && !token ? (
         <AuthView
           config={config}
           t={t}
@@ -630,6 +660,7 @@ function App() {
           }}
           onDelete={deleteRecord}
           onImport={importCsv}
+          authEnabled={authRequired}
         />
       )}
       <div className={`toast ${toast ? "show" : ""}`} role="status">{toast}</div>

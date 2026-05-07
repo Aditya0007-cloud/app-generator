@@ -11,9 +11,11 @@ const app = express();
 const PORT = process.env.PORT || 5001;
 const CONFIG_PATHS = [
   process.env.APP_CONFIG_PATH ? path.resolve(process.env.APP_CONFIG_PATH) : null,
+  path.join(__dirname, "../../frontend/public/config.json"),
   path.join(__dirname, "../../frontend/config.json"),
   path.join(__dirname, "../config.json"),
 ].filter(Boolean);
+let schemaSignature = "";
 
 app.use(cors());
 app.use(express.json({ limit: "2mb" }));
@@ -142,6 +144,22 @@ async function ensureSchema() {
   await pool.query(`CREATE INDEX IF NOT EXISTS ${config.entity}_owner_id_idx ON ${table} (owner_id)`);
 }
 
+async function ensureSchemaForCurrentConfig() {
+  const config = normalizeConfig();
+  const signature = JSON.stringify({
+    entity: config.entity,
+    fields: config.fields.map((field) => ({
+      column: field.column,
+      type: field.type,
+    })),
+  });
+
+  if (signature === schemaSignature) return;
+
+  await ensureSchema();
+  schemaSignature = signature;
+}
+
 function hashPassword(password, salt = crypto.randomBytes(16).toString("hex")) {
   const passwordHash = crypto.pbkdf2Sync(password, salt, 120000, 64, "sha512").toString("hex");
   return { salt, passwordHash };
@@ -160,7 +178,25 @@ async function createSession(userId) {
   return token;
 }
 
+function authEnabled() {
+  return normalizeConfig().auth?.enabled !== false;
+}
+
+function ownerWhere(userId, parameterIndex) {
+  return userId === null || userId === undefined ? "owner_id IS NULL" : `owner_id = $${parameterIndex}`;
+}
+
+function userWhere(userId, parameterIndex) {
+  return userId === null || userId === undefined ? "user_id IS NULL" : `user_id = $${parameterIndex}`;
+}
+
 async function requireAuth(req, res, next) {
+  if (!authEnabled()) {
+    req.user = { id: null, email: "Guest" };
+    req.token = null;
+    return next();
+  }
+
   const header = req.headers.authorization || "";
   const token = header.startsWith("Bearer ") ? header.slice(7) : "";
 
@@ -352,6 +388,10 @@ app.get("/auth/me", requireAuth, (req, res) => {
 });
 
 app.post("/auth/logout", requireAuth, async (req, res, next) => {
+  if (!authEnabled()) {
+    return res.json({ ok: true });
+  }
+
   try {
     await pool.query("DELETE FROM app_sessions WHERE token = $1", [req.token]);
     res.json({ ok: true });
@@ -362,9 +402,10 @@ app.post("/auth/logout", requireAuth, async (req, res, next) => {
 
 app.get("/api/notifications", requireAuth, async (req, res, next) => {
   try {
+    const params = req.user.id === null || req.user.id === undefined ? [] : [req.user.id];
     const result = await pool.query(
-      "SELECT id, type, message, created_at FROM app_notifications WHERE user_id = $1 ORDER BY id DESC LIMIT 10",
-      [req.user.id]
+      `SELECT id, type, message, created_at FROM app_notifications WHERE ${userWhere(req.user.id, 1)} ORDER BY id DESC LIMIT 10`,
+      params
     );
     res.json(result.rows);
   } catch (err) {
@@ -378,15 +419,17 @@ app.get("/api/:entity", requireAuth, async (req, res, next) => {
   }
 
   try {
+    await ensureSchemaForCurrentConfig();
     const config = normalizeConfig();
     const table = quoteIdentifier(config.entity);
     const columns = config.fields.map((field) => quoteIdentifier(field.column)).join(", ");
+    const params = req.user.id === null || req.user.id === undefined ? [] : [req.user.id];
     const result = await pool.query(
       `SELECT id, created_at, updated_at${columns ? `, ${columns}` : ""}
        FROM ${table}
-       WHERE owner_id = $1
+       WHERE ${ownerWhere(req.user.id, 1)}
        ORDER BY id DESC`,
-      [req.user.id]
+      params
     );
     res.json(result.rows.map(rowToEntity));
   } catch (err) {
@@ -405,6 +448,7 @@ app.post("/api/:entity", requireAuth, async (req, res, next) => {
   }
 
   try {
+    await ensureSchemaForCurrentConfig();
     const item = await insertRecord(values, req.user.id);
     await addNotification(req.user.id, "create", "Record created");
     res.status(201).json(item);
@@ -423,6 +467,7 @@ app.post("/api/:entity/import", requireAuth, async (req, res, next) => {
   const errors = [];
 
   try {
+    await ensureSchemaForCurrentConfig();
     for (const [index, record] of records.entries()) {
       const validation = validatePayload(record);
       if (validation.errors.length) {
@@ -450,16 +495,19 @@ app.put("/api/:entity/:id", requireAuth, async (req, res, next) => {
   }
 
   try {
+    await ensureSchemaForCurrentConfig();
     const config = normalizeConfig();
     const table = quoteIdentifier(config.entity);
     const fields = config.fields;
     const assignments = fields.map((field, index) => `${quoteIdentifier(field.column)} = $${index + 1}`).join(", ");
-    const params = [...fields.map((field) => values[field.column]), req.params.id, req.user.id];
+    const ownerParam = fields.length + 2;
+    const params = [...fields.map((field) => values[field.column]), req.params.id];
+    if (req.user.id !== null && req.user.id !== undefined) params.push(req.user.id);
     const returning = fields.map((field) => quoteIdentifier(field.column)).join(", ");
     const result = await pool.query(
       `UPDATE ${table}
        SET ${assignments}, updated_at = NOW()
-       WHERE id = $${fields.length + 1} AND owner_id = $${fields.length + 2}
+       WHERE id = $${fields.length + 1} AND ${ownerWhere(req.user.id, ownerParam)}
        RETURNING id, created_at, updated_at${returning ? `, ${returning}` : ""}`,
       params
     );
@@ -481,11 +529,11 @@ app.delete("/api/:entity/:id", requireAuth, async (req, res, next) => {
   }
 
   try {
+    await ensureSchemaForCurrentConfig();
     const table = quoteIdentifier(dynamicTableName());
-    const result = await pool.query(`DELETE FROM ${table} WHERE id = $1 AND owner_id = $2`, [
-      req.params.id,
-      req.user.id,
-    ]);
+    const params = [req.params.id];
+    if (req.user.id !== null && req.user.id !== undefined) params.push(req.user.id);
+    const result = await pool.query(`DELETE FROM ${table} WHERE id = $1 AND ${ownerWhere(req.user.id, 2)}`, params);
 
     if (!result.rowCount) {
       return res.status(404).json({ error: "Record not found" });
@@ -503,7 +551,7 @@ app.use((err, req, res, next) => {
   res.status(500).json({ error: "Server error", detail: err.message });
 });
 
-ensureSchema()
+ensureSchemaForCurrentConfig()
   .then(() => {
     app.listen(PORT, () => {
       console.log(`Server running on http://localhost:${PORT}`);
