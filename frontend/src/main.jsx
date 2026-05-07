@@ -15,6 +15,8 @@ const fallbackMessages = {
   importCsv: "Import CSV",
   notifications: "Notifications",
   empty: "No records yet",
+  editedBy: "Edited by",
+  editorName: "Editor",
 };
 
 function normalizeConfig(config) {
@@ -247,7 +249,7 @@ function Notifications({ config, t, notifications }) {
   );
 }
 
-function RecordsTable({ config, t, records, onEdit, onDelete }) {
+function RecordsTable({ config, t, records, onEdit, onDelete, showEditor }) {
   if (!records.length) {
     return <div className="empty">{t("empty")}</div>;
   }
@@ -258,6 +260,7 @@ function RecordsTable({ config, t, records, onEdit, onDelete }) {
         <thead>
           <tr>
             {config.fields.map((field) => <th key={field.name}>{field.label}</th>)}
+            {showEditor ? <th>{t("editedBy")}</th> : null}
             <th />
           </tr>
         </thead>
@@ -265,6 +268,7 @@ function RecordsTable({ config, t, records, onEdit, onDelete }) {
           {records.map((record) => (
             <tr key={record.id}>
               {config.fields.map((field) => <td key={field.name}>{record[field.name] ?? ""}</td>)}
+              {showEditor ? <td className="muted">{record.updated_by || record.created_by || "Guest"}</td> : null}
               <td>
                 <div className="row-actions">
                   <button type="button" className="secondary" onClick={() => onEdit(record.id)}>
@@ -302,6 +306,8 @@ function AppView({
   onDelete,
   onImport,
   authEnabled,
+  editorName,
+  onEditorNameChange,
 }) {
   const locales = config.localization.supportedLocales || [];
   const editRecord = records.find((record) => String(record.id) === String(editId));
@@ -321,7 +327,18 @@ function AppView({
               <span className="muted">{user?.email}</span>
               <button type="button" className="secondary" onClick={onLogout}>{t("logout")}</button>
             </>
-          ) : null}
+          ) : (
+            <label className="editor-control">
+              {t("editorName")}
+              <input
+                type="text"
+                value={editorName}
+                maxLength="80"
+                placeholder="Your name"
+                onChange={(event) => onEditorNameChange(event.target.value)}
+              />
+            </label>
+          )}
         </div>
       </header>
 
@@ -343,7 +360,14 @@ function AppView({
 
         <section className="panel">
           <h2>{t("data")}</h2>
-          <RecordsTable config={config} t={t} records={records} onEdit={onEdit} onDelete={onDelete} />
+          <RecordsTable
+            config={config}
+            t={t}
+            records={records}
+            onEdit={onEdit}
+            onDelete={onDelete}
+            showEditor={!authEnabled}
+          />
         </section>
       </main>
     </div>
@@ -364,6 +388,7 @@ function App() {
   const [statusType, setStatusType] = useState("");
   const [toast, setToast] = useState("");
   const [locale, setLocaleState] = useState(() => localStorage.getItem("app_locale") || "en");
+  const [editorName, setEditorNameState] = useState(() => localStorage.getItem("app_editor_name") || "");
   const configSignatureRef = useRef("");
   const localeRef = useRef(locale);
 
@@ -385,6 +410,11 @@ function App() {
     localStorage.setItem("app_locale", value);
   }
 
+  function setEditorName(value) {
+    setEditorNameState(value);
+    localStorage.setItem("app_editor_name", value);
+  }
+
   function showStatus(message, type = "") {
     setStatus(message);
     setStatusType(type);
@@ -393,6 +423,7 @@ function App() {
   async function api(path, options = {}) {
     const headers = { ...(options.headers || {}) };
     if (token) headers.Authorization = `Bearer ${token}`;
+    if (config?.auth?.enabled === false) headers["X-Editor-Name"] = editorName.trim() || "Guest";
     if (options.body && !(options.body instanceof FormData)) headers["Content-Type"] = "application/json";
 
     const response = await fetch(`${config.apiBase}${path}`, {
@@ -661,6 +692,8 @@ function App() {
           onDelete={deleteRecord}
           onImport={importCsv}
           authEnabled={authRequired}
+          editorName={editorName}
+          onEditorNameChange={setEditorName}
         />
       )}
       <div className={`toast ${toast ? "show" : ""}`} role="status">{toast}</div>

@@ -131,6 +131,17 @@ h3 {
   flex-wrap: wrap;
 }
 
+.editor-control {
+  min-width: 180px;
+  max-width: 240px;
+  gap: 4px;
+}
+
+.editor-control input {
+  min-height: 36px;
+  padding: 8px 10px;
+}
+
 .muted {
   color: var(--muted);
 }

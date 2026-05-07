@@ -128,12 +128,16 @@ async function ensureSchema() {
     CREATE TABLE IF NOT EXISTS ${table} (
       id SERIAL PRIMARY KEY,
       owner_id INTEGER REFERENCES app_users(id) ON DELETE CASCADE,
+      created_by TEXT,
+      updated_by TEXT,
       created_at TIMESTAMPTZ DEFAULT NOW(),
       updated_at TIMESTAMPTZ DEFAULT NOW()
     )
   `);
 
   await pool.query(`ALTER TABLE ${table} ADD COLUMN IF NOT EXISTS owner_id INTEGER REFERENCES app_users(id) ON DELETE CASCADE`);
+  await pool.query(`ALTER TABLE ${table} ADD COLUMN IF NOT EXISTS created_by TEXT`);
+  await pool.query(`ALTER TABLE ${table} ADD COLUMN IF NOT EXISTS updated_by TEXT`);
   await pool.query(`ALTER TABLE ${table} ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW()`);
   await pool.query(`ALTER TABLE ${table} ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW()`);
 
@@ -188,6 +192,13 @@ function ownerWhere(userId, parameterIndex) {
 
 function userWhere(userId, parameterIndex) {
   return userId === null || userId === undefined ? "user_id IS NULL" : `user_id = $${parameterIndex}`;
+}
+
+function editorName(req) {
+  const fallback = req.user?.email || "Guest";
+  const raw = req.headers["x-editor-name"] || req.body?.editorName || fallback;
+  const name = String(raw).trim().replace(/\s+/g, " ").slice(0, 80);
+  return name || fallback;
 }
 
 async function requireAuth(req, res, next) {
@@ -270,6 +281,8 @@ function rowToEntity(row) {
   const config = normalizeConfig();
   const item = {
     id: row.id,
+    created_by: row.created_by || "",
+    updated_by: row.updated_by || "",
     created_at: row.created_at,
     updated_at: row.updated_at,
   };
@@ -288,19 +301,19 @@ async function addNotification(userId, type, message) {
   );
 }
 
-async function insertRecord(values, userId) {
+async function insertRecord(values, userId, editedBy) {
   const config = normalizeConfig();
   const table = quoteIdentifier(config.entity);
   const fields = config.fields;
-  const columns = ["owner_id", ...fields.map((field) => field.column)];
-  const params = [userId, ...fields.map((field) => values[field.column])];
+  const columns = ["owner_id", "created_by", "updated_by", ...fields.map((field) => field.column)];
+  const params = [userId, editedBy, editedBy, ...fields.map((field) => values[field.column])];
   const placeholders = params.map((_, index) => `$${index + 1}`).join(", ");
   const returning = fields.map((field) => quoteIdentifier(field.column)).join(", ");
 
   const result = await pool.query(
     `INSERT INTO ${table} (${columns.map(quoteIdentifier).join(", ")})
      VALUES (${placeholders})
-     RETURNING id, created_at, updated_at${returning ? `, ${returning}` : ""}`,
+     RETURNING id, created_by, updated_by, created_at, updated_at${returning ? `, ${returning}` : ""}`,
     params
   );
 
@@ -425,7 +438,7 @@ app.get("/api/:entity", requireAuth, async (req, res, next) => {
     const columns = config.fields.map((field) => quoteIdentifier(field.column)).join(", ");
     const params = req.user.id === null || req.user.id === undefined ? [] : [req.user.id];
     const result = await pool.query(
-      `SELECT id, created_at, updated_at${columns ? `, ${columns}` : ""}
+      `SELECT id, created_by, updated_by, created_at, updated_at${columns ? `, ${columns}` : ""}
        FROM ${table}
        WHERE ${ownerWhere(req.user.id, 1)}
        ORDER BY id DESC`,
@@ -449,8 +462,9 @@ app.post("/api/:entity", requireAuth, async (req, res, next) => {
 
   try {
     await ensureSchemaForCurrentConfig();
-    const item = await insertRecord(values, req.user.id);
-    await addNotification(req.user.id, "create", "Record created");
+    const editedBy = editorName(req);
+    const item = await insertRecord(values, req.user.id, editedBy);
+    await addNotification(req.user.id, "create", `Record created by ${editedBy}`);
     res.status(201).json(item);
   } catch (err) {
     next(err);
@@ -468,16 +482,17 @@ app.post("/api/:entity/import", requireAuth, async (req, res, next) => {
 
   try {
     await ensureSchemaForCurrentConfig();
+    const editedBy = editorName(req);
     for (const [index, record] of records.entries()) {
       const validation = validatePayload(record);
       if (validation.errors.length) {
         errors.push({ row: index + 1, error: validation.errors.join(", ") });
         continue;
       }
-      imported.push(await insertRecord(validation.values, req.user.id));
+      imported.push(await insertRecord(validation.values, req.user.id, editedBy));
     }
 
-    await addNotification(req.user.id, "import", `Imported ${imported.length} record(s)`);
+    await addNotification(req.user.id, "import", `Imported ${imported.length} record(s) by ${editedBy}`);
     res.json({ imported, errors });
   } catch (err) {
     next(err);
@@ -500,15 +515,18 @@ app.put("/api/:entity/:id", requireAuth, async (req, res, next) => {
     const table = quoteIdentifier(config.entity);
     const fields = config.fields;
     const assignments = fields.map((field, index) => `${quoteIdentifier(field.column)} = $${index + 1}`).join(", ");
-    const ownerParam = fields.length + 2;
-    const params = [...fields.map((field) => values[field.column]), req.params.id];
+    const updatedByParam = fields.length + 1;
+    const idParam = fields.length + 2;
+    const ownerParam = fields.length + 3;
+    const editedBy = editorName(req);
+    const params = [...fields.map((field) => values[field.column]), editedBy, req.params.id];
     if (req.user.id !== null && req.user.id !== undefined) params.push(req.user.id);
     const returning = fields.map((field) => quoteIdentifier(field.column)).join(", ");
     const result = await pool.query(
       `UPDATE ${table}
-       SET ${assignments}, updated_at = NOW()
-       WHERE id = $${fields.length + 1} AND ${ownerWhere(req.user.id, ownerParam)}
-       RETURNING id, created_at, updated_at${returning ? `, ${returning}` : ""}`,
+       SET ${assignments}, updated_by = $${updatedByParam}, updated_at = NOW()
+       WHERE id = $${idParam} AND ${ownerWhere(req.user.id, ownerParam)}
+       RETURNING id, created_by, updated_by, created_at, updated_at${returning ? `, ${returning}` : ""}`,
       params
     );
 
@@ -516,7 +534,7 @@ app.put("/api/:entity/:id", requireAuth, async (req, res, next) => {
       return res.status(404).json({ error: "Record not found" });
     }
 
-    await addNotification(req.user.id, "update", "Record updated");
+    await addNotification(req.user.id, "update", `Record updated by ${editedBy}`);
     res.json(rowToEntity(result.rows[0]));
   } catch (err) {
     next(err);
@@ -530,6 +548,7 @@ app.delete("/api/:entity/:id", requireAuth, async (req, res, next) => {
 
   try {
     await ensureSchemaForCurrentConfig();
+    const editedBy = editorName(req);
     const table = quoteIdentifier(dynamicTableName());
     const params = [req.params.id];
     if (req.user.id !== null && req.user.id !== undefined) params.push(req.user.id);
@@ -539,7 +558,7 @@ app.delete("/api/:entity/:id", requireAuth, async (req, res, next) => {
       return res.status(404).json({ error: "Record not found" });
     }
 
-    await addNotification(req.user.id, "delete", "Record deleted");
+    await addNotification(req.user.id, "delete", `Record deleted by ${editedBy}`);
     res.json({ ok: true });
   } catch (err) {
     next(err);
